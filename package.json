@@ -11,6 +11,7 @@
     "node": ">=10"
   },
   "scripts": {
+    "ulisp": "ts-node src/index.ts",
     "start": "tsdx watch",
     "build": "tsdx build",
     "test": "tsdx test",
