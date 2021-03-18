@@ -3,21 +3,38 @@ import os from 'os';
 type Arg = string | number
 type Operator = string
 type Args = [Operator, Arg, Args]
+type Scope = Record<string, string>
 // type TupleType<T extends any[]> = {
 //     [P in keyof T]: T[P]
 // }
 // type InstructionValue = TupleType<Args>
 
-const SYSCALL_MAP = os.platform() === 'darwin' ? {
+const BUILTIN_FUNCTIONS: Record<string, string> = { '+': 'plus' };
+const primitive_functions: Record<string, Function> = {
+    def: compile_define,
+    begin: compile_begin,
+};
+
+const PARAM_REGISTERS: string[] = ['RDI', 'RSI', 'RDX'];
+const LOCAL_REGISTERS: string[] = [
+    'RBX',
+    'RBP',
+    'R12',
+];
+
+const SYSCALL_MAP: Record<string, string | number> = os.platform() === 'darwin' ? {
     'exit': '0x2000001',
 } : {
         'exit': 60,
     };
 
 let context = {
-    assembly:'',
-    push(code:string){
-        context.assembly+=code+'\n';
+    assembly: '',
+    push(code: string) {
+        context.assembly += code + '\n';
+    },
+    reset(){
+        context.assembly = ''
     }
 }
 
@@ -37,42 +54,81 @@ function emit_prefix() {
     emit(1, 'ADD RDI, RSI');
     emit(1, 'MOV RAX, RDI');
     emit(1, 'RET\n');
-
-    emit(0, '_main:');
 }
 
 function emit_postfix() {
+    emit(0, '_main:');
+    emit(1, 'CALL main');
     emit(1, 'MOV RDI, RAX'); // Set exit arg
-    emit(1, `MOV RAX, ${SYSCALL_MAP['exit']}`); // Set syscall number
+    emit(1, `MOV RAX, ${SYSCALL_MAP['exit']}`);
     emit(1, 'SYSCALL');
 }
 
-function compile_argument(arg: Args[number], destination: string) {
-    // If arg AST is a list, call compile_call on it
+function compile_define([name, params, ...body]: any[], _: string, scope: Scope) {
+    // Add this function to outer scope
+    scope[name] = name.replace('-', '_');
+
+    // Copy outer scope so parameter mappings aren't exposed in outer scope.
+    const childScope = { ...scope };
+
+    emit(0, `${scope[name]}:`);
+
+    params.forEach((param: Arg, i: number) => {
+        const register = PARAM_REGISTERS[i];
+        const local = LOCAL_REGISTERS[i];
+        emit(1, `PUSH ${local}`);
+        emit(1, `MOV ${local}, ${register}`);
+        // Store parameter mapped to associated local
+        childScope[param] = local;
+    });
+
+    // Pass childScope in for reference when body is compiled.
+    compile_expression(body[0], 'RAX', childScope);
+
+    params.forEach((_: Arg, i: number) => {
+        // Backwards first
+        const local = LOCAL_REGISTERS[params.length - i - 1];
+        emit(1, `POP ${local}`);
+    });
+
+    emit(1, 'RET\n');
+}
+
+function compile_expression(arg: Args[number], destination: string, scope: Scope) {
+    // Is a nested function call, compile it
     if (Array.isArray(arg)) {
-        compile_call(arg[0], (arg as Args).slice(1) as Args, destination);
+        compile_call(arg[0], arg.slice(1) as Args, destination, scope);
         return;
     }
 
-    // Else must be a literal number, store in destination register
-    emit(1, `MOV ${destination}, ${arg}`);
+    if (scope[arg] || Number.isInteger(arg)) {
+        emit(1, `MOV ${destination}, ${scope[arg] || arg}`);
+    } else {
+        throw new Error('Attempt to reference undefined variable or unsupported literal: ' + arg);
+    }
 }
 
-const BUILTIN_FUNCTIONS: { [key: string]: string } = { '+': 'plus' };
-const PARAM_REGISTERS:string[] = ['RDI', 'RSI', 'RDX'];
-
-function compile_call(fun: string, args: Args, destination?:string) {
+function compile_call(fun: string, args: Args, destination: string, scope: Scope) {
+    if (primitive_functions[fun]) {
+        primitive_functions[fun](args, destination, scope);
+        return;
+    }
     // Save param registers to the stack
     args.forEach((_: Args[number], i: number) => emit(1, `PUSH ${PARAM_REGISTERS[i]}`));
 
     // Compile arguments and store in param registers
-    args.forEach((arg: Args[number], i: number) => compile_argument(arg, PARAM_REGISTERS[i]));
+    args.forEach((arg: Args[number], i: number) => compile_expression(arg, PARAM_REGISTERS[i], scope));
 
-    // Call function
-    emit(1, `CALL ${BUILTIN_FUNCTIONS[fun] || fun}`);
+    // call functions
+    const validFunction = BUILTIN_FUNCTIONS[fun] || scope[fun];
+    if (validFunction) {
+        emit(1, `CALL ${validFunction}`);
+    } else {
+        throw new Error('Attempt to call undefined function: ' + fun);
+    }
 
     // Restore param registers from the stack
-    args.forEach((_: Args[number], i:number) => emit(1, `POP ${PARAM_REGISTERS[args.length - i - 1]}`));
+    args.forEach((_: Args[number], i: number) => emit(1, `POP ${PARAM_REGISTERS[args.length - i - 1]}`));
 
     // Move result into destination if provided
     if (destination) {
@@ -82,9 +138,17 @@ function compile_call(fun: string, args: Args, destination?:string) {
     emit(0, ''); // For nice formatting
 }
 
-export function compile(ast:any) {
+function compile_begin(body: Args, destination: string, scope: Scope) {
+    body.forEach((expression: Args[number]) => compile_expression(expression, 'RAX', scope));
+    if (destination && destination !== 'RAX') {
+        emit(1, `MOV ${destination}, RAX`);
+    }
+}
+export function compile(ast: any) {
+    context.reset()
     emit_prefix();
-    compile_call(ast[0], ast.slice(1));
+    // Pass in new, empty scope mapping
+    compile_call('begin', ast, 'RAX', {});
     emit_postfix();
     return context
 };

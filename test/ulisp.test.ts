@@ -1,21 +1,48 @@
-import { parse,Tokens } from '../src';
-import {compile} from '../src/compiler'
+import { parse, Tokens } from '../src';
+import { compile } from '../src/compiler'
+import cp from 'child_process'
+import fs from 'fs';
 
 describe('ulisp', () => {
   let program = '(+ 31 (+ 1 2))'
-  it('parse', () => {
+
+  it('parse expression', () => {
     let tokens: Tokens = [[["+", 31, ["+", 1, 2]]], ""]
     expect(JSON.stringify(parse(program))).toEqual(JSON.stringify(tokens));
   });
-  it('compile',()=>{
+
+  it('parse function', () => {
+    let program = '(def main () (+ 1 2))'
+    expect(JSON.stringify(parse(program))).toMatchSnapshot();
+  });
+
+  it('compile expression', () => {
     const script = program;
-    // const result = `.global _main
-    //   .text
-    // plus:  ADD RDI, RSI  MOV RAX, RDI  RET
-    // _main:  PUSH RDI  PUSH RSI  MOV RDI, 31  PUSH RDI  PUSH RSI  MOV RDI, 1  MOV RSI, 2  CALL plus  POP RSI  POP RDI  MOV RSI, RAX  CALL plus  POP RSI  POP RDI  MOV RDI, RAX  MOV RAX, 0x2000001  SYSCALL`
     const [ast] = parse(script);
-    let context = compile(ast[0]);
+    let context = compile(ast);
     expect(context.assembly).toMatchSnapshot();
-    console.log(context.assembly)
+  })
+  it('compile function ', () => {
+    const script = '(def main () (+ 1 2))';
+    const [ast] = parse(script);
+    let context = compile(ast);
+    // console.log(context.assembly)
+    expect(context.assembly).toMatchSnapshot();
+  })
+  it('compile user defined function and call', () => {
+    const script = `
+(def plus-two (a) (+ a 2))
+(def main () (plus-two 3))`;
+
+    const [ast] = parse(script);
+    expect(JSON.stringify(ast)).toMatchSnapshot();
+    let context = compile(ast);
+    expect(context.assembly).toMatchSnapshot();
+    // console.log(context.assembly)
+    try {
+      fs.mkdirSync('build');
+    } catch (e) { }
+    fs.writeFileSync('build/prog.s', context.assembly);
+    cp.execSync('gcc -mstackrealign -masm=intel -o build/a.out build/prog.s');
   })
 });
