@@ -36,7 +36,7 @@ let context = {
     push(code: string) {
         context.assembly += code + '\n';
     },
-    reset(){
+    reset() {
         context.assembly = ''
     }
 }
