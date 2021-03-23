@@ -1,5 +1,4 @@
-export type Token = string | number
-export type Tokens = (Tokens | Token)[]
+import { Tokens } from './type'
 
 const WHITESPACE = [' ', '\n', '\t'];
 export function parse(program: string): [Tokens, string] {

@@ -1,7 +1,8 @@
-// import { parse, Tokens } from '../src';
-// import { compile } from '../src/compiler'
-// import cp from 'child_process'
-// import fs from 'fs';
+import { main } from '../src/ulisp'
 
-describe('ulisp LLVM', () => {
+describe('ulisp llvm', () => {
+
+  it('function_definition', () => {
+    main('../tests/function_definition.lisp')
+  });
 });

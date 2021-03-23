@@ -44,7 +44,7 @@ describe('ulisp x86', () => {
     } catch (e) { }
     fs.writeFileSync('build/prog.s', context.assembly);
     cp.execSync('gcc -mstackrealign -masm=intel -o build/a.out build/prog.s');
-    let result = cp.execSync('build/a.out |  echo $?');
-    console.log(result.toString())
+    // let result = cp.execSync('build/a.out |  echo $?');
+    // console.log(result.toString())
   })
 });
