@@ -1,16 +1,15 @@
 import os from 'os';
 
-type Arg = string | number
-type Operator = string
-type Args = [Operator, Arg, Args]
+type Literal = string | number
+// type Operator = string
+// type Expression = [Operator, Literal, Expression]
 type Scope = Record<string, string>
-type FuncName = string
-type Expression = Args[]
-type FuncDefinition = [FuncName, Arg[], ...Expression]
+
+import { Expression,FuncDefinition} from './type'
 // type TupleType<T extends any[]> = {
 //     [P in keyof T]: T[P]
 // }
-// type InstructionValue = TupleType<Args>
+// type InstructionValue = TupleType<Expression>
 
 const BUILTIN_FUNCTIONS: Record<string, string> = { '+': 'plus' };
 const primitive_functions: Record<string, Function> = {
@@ -76,7 +75,7 @@ function compile_define([name, params, ...body]: FuncDefinition, _: string, scop
 
     emit(0, `${scope[name]}:`);
 
-    params.forEach((param: Arg, i: number) => {
+    params.forEach((param: Literal, i: number) => {
         const register = PARAM_REGISTERS[i];
         const local = LOCAL_REGISTERS[i];
         emit(1, `PUSH ${local}`);
@@ -88,7 +87,7 @@ function compile_define([name, params, ...body]: FuncDefinition, _: string, scop
     // Pass childScope in for reference when body is compiled.
     compile_expression(body[0], 'RAX', childScope);
 
-    params.forEach((_: Arg, i: number) => {
+    params.forEach((_: Literal, i: number) => {
         // Backwards first
         const local = LOCAL_REGISTERS[params.length - i - 1];
         emit(1, `POP ${local}`);
@@ -97,10 +96,10 @@ function compile_define([name, params, ...body]: FuncDefinition, _: string, scop
     emit(1, 'RET\n');
 }
 
-function compile_expression(arg: Args[number], destination: string, scope: Scope) {
+function compile_expression(arg: Expression[number], destination: string, scope: Scope) {
     // Is a nested function call, compile it
     if (Array.isArray(arg)) {
-        compile_call(arg[0], arg.slice(1) as Args, destination, scope);
+        compile_call(arg[0], arg.slice(1) as Expression, destination, scope);
         return;
     }
 
@@ -111,16 +110,16 @@ function compile_expression(arg: Args[number], destination: string, scope: Scope
     }
 }
 
-function compile_call(fun: string, args: Args, destination: string, scope: Scope) {
+function compile_call(fun: string, args: Expression, destination: string, scope: Scope) {
     if (primitive_functions[fun]) {
         primitive_functions[fun](args, destination, scope);
         return;
     }
     // Save param registers to the stack
-    args.forEach((_: Args[number], i: number) => emit(1, `PUSH ${PARAM_REGISTERS[i]}`));
+    args.forEach((_: Expression[number], i: number) => emit(1, `PUSH ${PARAM_REGISTERS[i]}`));
 
     // Compile arguments and store in param registers
-    args.forEach((arg: Args[number], i: number) => compile_expression(arg, PARAM_REGISTERS[i], scope));
+    args.forEach((arg: Expression[number], i: number) => compile_expression(arg, PARAM_REGISTERS[i], scope));
 
     // call functions
     const validFunction = BUILTIN_FUNCTIONS[fun] || scope[fun];
@@ -131,7 +130,7 @@ function compile_call(fun: string, args: Args, destination: string, scope: Scope
     }
 
     // Restore param registers from the stack
-    args.forEach((_: Args[number], i: number) => emit(1, `POP ${PARAM_REGISTERS[args.length - i - 1]}`));
+    args.forEach((_: Expression[number], i: number) => emit(1, `POP ${PARAM_REGISTERS[args.length - i - 1]}`));
 
     // Move result into destination if provided
     if (destination) {
@@ -141,8 +140,8 @@ function compile_call(fun: string, args: Args, destination: string, scope: Scope
     emit(0, ''); // For nice formatting
 }
 
-function compile_begin(body: Args, destination: string, scope: Scope) {
-    body.forEach((expression: Args[number]) => compile_expression(expression, 'RAX', scope));
+function compile_begin(body: Expression, destination: string, scope: Scope) {
+    body.forEach((expression: Expression[number]) => compile_expression(expression, 'RAX', scope));
     if (destination && destination !== 'RAX') {
         emit(1, `MOV ${destination}, RAX`);
     }

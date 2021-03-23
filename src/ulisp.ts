@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path'
-import { Args} from './type'
+import { Expression} from './type'
 import { parse } from './parser';
 import { llvm } from './backend';
 
@@ -21,12 +21,12 @@ export function main(src: string, backendType: 'llvm' | 'x86' = 'llvm') {
     }
 
     const [ast] = parse(input);
-    const program = backend.compile(ast as Args);
+    const program = backend.compile(ast as Expression);
 
     try {
         fs.mkdirSync('build');
     } catch (e) { }
-    backend.build('build', program);
+    backend.build('build', src.split('/').join('-'), program);
 }
 
 // main(process.argv);

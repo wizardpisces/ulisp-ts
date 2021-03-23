@@ -5,8 +5,8 @@ import Scope from './utility/Scope'
 // type TupleType<T extends any[]> = {
 //     [P in keyof T]: T[P]
 // }
-// type InstructionValue = TupleType<Args>
-import { FuncDefinition, Arg,Args} from '../type'
+// type InstructionValue = TupleType<Expression>
+import { FuncDefinition, Literal, Expression, IfExpression} from '../type'
 class Compiler {
     outBuffer: string[] = []
     primitiveFunctions:Record<string,Function>
@@ -19,7 +19,33 @@ class Compiler {
             '+': this.compileOp('add'),
             '-': this.compileOp('sub'),
             '*': this.compileOp('mul'),
+            '<': this.compileOp('icmp slt'),
+            'if': this.compileIf.bind(this),
         };
+    }
+
+    compileIf([test, thenBlock, elseBlock]: IfExpression, destination:string, scope:Scope) {
+        const testVariable = scope.symbol();
+
+        // Compile expression and branch
+        this.compileExpression(test, testVariable, scope);
+        const trueLabel = scope.symbol('iftrue');
+        const falseLabel = scope.symbol('iffalse');
+        this.emit(1, `br i1 %${testVariable}, label %${trueLabel}, label %${falseLabel}`);
+
+        // Compile true section
+        this.emit(0, trueLabel + ':');
+        this.compileExpression(thenBlock, destination, scope);
+        const endLabel = scope.symbol('ifend');
+        this.emit(1, 'br label %' + endLabel);
+        this.emit(0, falseLabel + ':');
+
+        // Compile false section
+        this.compileExpression(elseBlock, destination, scope);
+        this.emit(1, 'br label %' + endLabel);
+
+        // Compile cleanup
+        this.emit(0, endLabel + ':');
     }
 
     emit(depth: number, code: string) {
@@ -44,7 +70,7 @@ class Compiler {
         // Copy outer scope so parameter mappings aren't exposed in outer scope.
         const childScope = scope.copy();
 
-        const safeParams = params.map((param:Arg) =>
+        const safeParams = params.map((param:Literal) =>
             // Store parameter mapped to associated local
             childScope.register(param as string),
         );
@@ -64,7 +90,7 @@ class Compiler {
         this.emit(0, '}\n');
     }
 
-    compileCall(fun: string, args: Args, destination: string, scope: Scope){
+    compileCall(fun: string, args: Expression, destination: string, scope: Scope){
         if (this.primitiveFunctions[fun]) {
             this.primitiveFunctions[fun](args, destination, scope);
             return;
@@ -85,10 +111,10 @@ class Compiler {
         }
     }
 
-    compileExpression(exp: Args[number], destination: string, scope: Scope) {
+    compileExpression(exp: Expression[number], destination: string, scope: Scope) {
         // Is a nested function call, compile it
         if (Array.isArray(exp)) {
-            this.compileCall(exp[0], exp.slice(1) as Args, destination, scope);
+            this.compileCall(exp[0], exp.slice(1) as Expression, destination, scope);
             return;
         }
 
@@ -110,8 +136,8 @@ class Compiler {
         }
     }
 
-    compileBegin(body: Args, destination: string, scope: Scope) {
-        body.forEach((expression: Args[number], i) =>
+    compileBegin(body: Expression, destination: string, scope: Scope) {
+        body.forEach((expression: Expression[number], i) =>
             this.compileExpression(
                 expression,
                 i === body.length - 1 ? destination : scope.symbol(),
@@ -126,15 +152,15 @@ class Compiler {
 
 }
 
-function compile(ast: Args) {
+function compile(ast: Expression) {
     const c = new Compiler();
     const scope = new Scope();
     c.compileBegin(ast, scope.symbol(), scope);
     return c.getOutput();
 };
 
-function build(buildDir: string, program: string) {
-    const prog = 'prog';
+function build(buildDir: string,prefix:string='', program: string) {
+    const prog = 'prog-' + prefix;
     fs.writeFileSync(buildDir + `/${prog}.ll`, program);
     cp.execSync(`llc -o ${buildDir}/${prog}.s ${buildDir}/${prog}.ll`);
     cp.execSync(`gcc -o ${buildDir}/${prog} ${buildDir}/${prog}.s`);
