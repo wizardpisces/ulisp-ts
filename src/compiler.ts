@@ -1,6 +1,6 @@
 import os from 'os';
 
-type Literal = string | number
+type Literal = string
 // type Operator = string
 // type Expression = [Operator, Literal, Expression]
 type Scope = Record<string, string>

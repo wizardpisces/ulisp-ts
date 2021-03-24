@@ -13,3 +13,7 @@ npm run test
 
 Typescript version of [ulisp](https://github.com/eatonphil/ulisp)
 
+# Question
+
+* alloca 是啥
+* syscall是啥

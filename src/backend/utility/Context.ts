@@ -1,6 +1,8 @@
-const { Scope } = require('./Scope');
+import Scope from './Scope';
 
-class Context {
+export class Context {
+  scope!:Scope
+  tailCallTree:string[]
   constructor() {
     this.scope = new Scope();
     this.tailCallTree = [];

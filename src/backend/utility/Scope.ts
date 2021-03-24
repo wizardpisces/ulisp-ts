@@ -1,5 +1,4 @@
-// type Locals = Record<string, { type: 'i64', value: string }>
-type NamePointer = string;
+export type NamePointer = { type: string, value: string };
 type Locals = Record<string, NamePointer>;
 
 export default class Scope {
@@ -24,11 +23,10 @@ export default class Scope {
       namePointer = name + n++;
     }
 
-    this.locals[name] = namePointer
-    // this.locals[name] = {
-    //   value: namePointer,
-    //   type: 'i64',
-    // };
+    this.locals[name] = {
+      value: namePointer,
+      type: 'i64',
+    };
     return this.locals[name];
   }
 
@@ -38,5 +36,3 @@ export default class Scope {
     return c;
   }
 }
-
-module.exports.Scope = Scope;

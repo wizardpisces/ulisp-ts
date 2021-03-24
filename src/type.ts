@@ -1,4 +1,4 @@
-export type Literal = string | number
+export type Literal = string
 export type Operator = string
 export type FuncName = string
 export type Expression = [Operator, Literal, Expression]

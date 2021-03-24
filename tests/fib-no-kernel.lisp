@@ -4,4 +4,4 @@
        (+ (fib (- n 1)) (fib (- n 2)))))
 
 (def main ()
-     (print (fib 20)))
+     (fib 10))

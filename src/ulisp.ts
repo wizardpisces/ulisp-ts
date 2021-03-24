@@ -5,7 +5,8 @@ import { parse } from './parser';
 import { llvm } from './backend';
 
 export function main(src: string, backendType: 'llvm' | 'x86' = 'llvm') {
-    const input = fs.readFileSync(path.join(__dirname,src)).toString();
+    const kernel = fs.readFileSync(__dirname + '/../lib/kernel.lisp').toString();
+    const input = kernel + '\n' + fs.readFileSync(path.join(__dirname,src)).toString();
 
     let backend;
     switch (backendType) {

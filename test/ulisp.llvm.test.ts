@@ -9,5 +9,9 @@ describe('ulisp llvm', () => {
   it('fib', () => {
     main('../tests/fib.lisp')
   });
+
+  it('print', () => {
+    main('../tests/print.lisp')
+  });
   
 });
