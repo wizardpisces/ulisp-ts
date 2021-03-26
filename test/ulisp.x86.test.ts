@@ -2,6 +2,7 @@ import { parse, Tokens } from '../src';
 import { compile } from '../src/compiler'
 import cp from 'child_process'
 import fs from 'fs';
+import {main} from '../src/ulisp'
 
 describe('ulisp x86', () => {
   let program = '(+ 31 (+ 1 2))'
@@ -47,4 +48,21 @@ describe('ulisp x86', () => {
     // let result = cp.execSync('build/a.out |  echo $?');
     // console.log(result.toString())
   })
+});
+
+
+describe('x86 llvm', () => {
+
+  it('function_definition', () => {
+    main('../tests/function_definition.lisp','x86')
+  });
+
+  it('fib', () => {
+    main('../tests/fib.lisp','x86')
+  });
+
+  it('print', () => {
+    main('../tests/print.lisp','x86')
+  });
+
 });

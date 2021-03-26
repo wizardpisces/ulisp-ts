@@ -1,0 +1,400 @@
+import { Expression, SystemCall, Platform, IfExpression, FuncDefinition, FuncName } from "../type";
+import os from 'os'
+import cp from 'child_process';
+import fs from 'fs';
+
+// function range(n:number) {
+//     return Array.from(Array(n).keys());
+// }
+
+let GLOBAL_COUNTER = 0;
+
+const SYSCALL_MAP: SystemCall = {
+    darwin: {
+        exit: 0x2000001,
+        write: 0x2000004,
+    },
+    linux: {
+        exit: 60,
+        write: 1,
+    }
+}[os.platform() as Platform];
+// }[process.platform as Platform];
+
+type X86NamePointer = { name: string, offset: number }
+class Scope {
+    localOffset: number
+    map: Record<string, number>
+    constructor() {
+        this.localOffset = 1;
+        this.map = {};
+    }
+
+    assign(name: string):string {
+        const safe = name.replace('-', '_');
+        this.map[safe] = this.localOffset++;
+        return safe;
+    }
+
+    symbol():number {
+        return this.localOffset++;
+    }
+
+    lookup(name: string): X86NamePointer | null {
+        const safe = name.replace('-', '_');
+        if (this.map[safe]) {
+            return { name: safe, offset: this.map[safe] };
+        }
+
+        return null;
+    }
+
+    copy(): Scope {
+        const s = new Scope();
+        // In the future we may need to store s.scopeOffset = this.scopeOffset + 1
+        // so we can read outer-scoped values at runtime.
+        s.map = { ...this.map };
+        return s;
+    }
+}
+
+class Compiler {
+    outBuffer: string[]
+    primitiveFunctions: Record<string, Function>
+    constructor() {
+        this.outBuffer = [];
+        this.primitiveFunctions = {
+            def: this.compileDefine.bind(this),
+            begin: this.compileBegin.bind(this),
+            if: this.compileIf.bind(this),
+            ...this.prepareArithmeticWrappers(),
+            ...this.prepareLogicalWrappers(),
+            ...this.prepareSyscallWrappers(),
+        };
+    }
+
+    prepareArithmeticWrappers() {
+        // General operatations
+        const prepareGeneral = (instruction: string) => (arg: Expression, scope: Scope, depth: number) => {
+            depth++;
+            this.emit(depth, `# ${instruction.toUpperCase()}`);
+
+            // Compile first argument
+            this.compileExpression(arg[0], scope, depth);
+
+            // Compile second argument
+            this.compileExpression(arg[1], scope, depth);
+            this.emit(depth, `POP RAX`);
+
+            // Compile operation
+            this.emit(depth, `${instruction.toUpperCase()} [RSP], RAX`);
+
+            this.emit(depth, `# End ${instruction.toUpperCase()}`);
+        };
+
+        // Operations that use RAX implicitly
+        const prepareRax = (instruction: string, outRegister = 'RAX') => (
+            arg: Expression,
+            scope: Scope,
+            depth: number,
+        ) => {
+            depth++;
+            this.emit(depth, `# ${instruction.toUpperCase()}`);
+
+            // Compile first argument, store in RAX
+            this.compileExpression(arg[0], scope, depth);
+
+            // Compile second argument
+            this.compileExpression(arg[1], scope, depth);
+
+            // Must POP _after_ both have been compiled
+            this.emit(depth, `POP RAX`);
+            this.emit(depth, `XCHG [RSP], RAX`);
+
+            // Reset RDX for DIV
+            if (instruction.toUpperCase() === 'DIV') {
+                this.emit(depth, `XOR RDX, RDX`);
+            }
+
+            // Compiler operation
+            this.emit(depth, `${instruction.toUpperCase()} QWORD PTR [RSP]`);
+
+            // Swap the top of the stack
+            this.emit(depth, `MOV [RSP], ${outRegister}`);
+        };
+
+        return {
+            '+': prepareGeneral('add'),
+            '-': prepareGeneral('sub'),
+            '&': prepareGeneral('and'),
+            '|': prepareGeneral('or'),
+            '=': prepareGeneral('mov'),
+            '*': prepareRax('mul'),
+            '/': prepareRax('div'),
+            '%': prepareRax('div', 'RDX'),
+        };
+    }
+
+    prepareLogicalWrappers(): Record<string, Function> {
+        const prepareComparison = (operator: string) => {
+            return {
+                [operator]: (arg: Expression, scope: Scope, depth: number) => {
+                    depth++;
+                    this.emit(depth, `# ${operator}`);
+
+                    // Compile first argument, store in RAX
+                    this.compileExpression(arg[0], scope, depth);
+
+                    // Compile second argument
+                    this.compileExpression(arg[1], scope, depth);
+                    this.emit(depth, `POP RAX`);
+
+                    // Compile operation
+                    this.emit(depth, `CMP [RSP], RAX`);
+
+                    // Reset RAX to serve as CMOV* dest, MOV to keep flags (vs. XOR)
+                    this.emit(depth, `MOV RAX, 0`);
+
+                    // Conditional set [RSP]
+                    const operation = {
+                        '>': 'CMOVA',
+                        '>=': 'CMOVAE',
+                        '<': 'CMOVB',
+                        '<=': 'CMOVBE',
+                        '==': 'CMOVE',
+                        '!=': 'CMOVNE',
+                    }[operator];
+                    // CMOV* requires the source to be memory or register
+                    this.emit(depth, `MOV DWORD PTR [RSP], 1`);
+                    // CMOV* requires the dest to be a register
+                    this.emit(depth, `${operation} RAX, [RSP]`);
+                    this.emit(depth, `MOV [RSP], RAX`);
+                    this.emit(depth, `# End ${operator}`);
+                },
+            };
+        };
+
+        return {
+            ...prepareComparison('>'),
+            ...prepareComparison('>='),
+            ...prepareComparison('<'),
+            ...prepareComparison('<='),
+            ...prepareComparison('=='),
+            ...prepareComparison('!='),
+        };
+    }
+
+    prepareSyscallWrappers() {
+        const registers = ['RDI', 'RSI', 'RDX', 'R10', 'R8', 'R9'];
+
+        const wrappers: Record<string, Function> = {};
+        Object.keys(SYSCALL_MAP).forEach((key) => {
+            wrappers[`syscall/${key}`] = (args: Expression, scope: Scope, depth: number) => {
+                if (args.length > registers.length) {
+                    throw new Error(`Too many arguments to syscall/${key}`);
+                }
+
+                // Compile first
+                args.forEach((arg) => this.compileExpression(arg, scope, depth));
+
+                // Then pop to avoid possible register contention
+                args.forEach((_, i) =>
+                    this.emit(depth, `POP ${registers[args.length - i - 1]}`),
+                );
+
+                this.emit(depth, `MOV RAX, ${SYSCALL_MAP[key as keyof SystemCall]}`);
+                this.emit(depth, 'SYSCALL');
+                this.emit(depth, `PUSH RAX`);
+            };
+        });
+
+        return wrappers;
+    }
+
+    emit(depth: number, args: string) {
+        if (depth === undefined || args === undefined) {
+            throw new Error('Invalid call to emit');
+        }
+
+        const indent = new Array(depth + 1).join('  ');
+        this.outBuffer.push(indent + args);
+    }
+
+    compileExpression(arg: Expression[number], scope: Scope, depth: number) {
+        // Is a nested function call, compile it
+        if (Array.isArray(arg)) {
+            this.compileCall(arg[0], arg.slice(1) as Expression, scope, depth);
+            return;
+        }
+
+        if (Number.isInteger(arg)) {
+            this.emit(depth, `PUSH ${arg}`);
+            return;
+        }
+
+        if ((arg).startsWith('&')) {
+            const { offset } = scope.lookup(arg.substring(1)) as X86NamePointer;
+            // Copy the frame pointer so we can return an offset from it
+            this.emit(depth, `MOV RAX, RBP`);
+            const operation = offset < 0 ? 'ADD' : 'SUB';
+            this.emit(depth, `${operation} RAX, ${Math.abs(offset * 8)} # ${arg}`);
+            this.emit(depth, `PUSH RAX`);
+            return;
+        }
+
+        const { offset } = scope.lookup(arg) as X86NamePointer;
+        if (offset) {
+            const operation = offset < 0 ? '+' : '-';
+            this.emit(
+                depth,
+                `PUSH [RBP ${operation} ${Math.abs(offset * 8)}] # ${arg}`,
+            );
+        } else {
+            throw new Error(
+                'Attempt to reference undefined variable or unsupported literal: ' +
+                arg,
+            );
+        }
+    }
+
+    compileIf([test, then, els]:IfExpression, scope:Scope, depth:number) {
+        this.emit(depth, '# If');
+        // Compile test
+        this.compileExpression(test, scope, depth);
+        const branch = `else_branch` + GLOBAL_COUNTER++;
+        // Must pop/use up argument in test
+        this.emit(0, '');
+        this.emit(depth, `POP RAX`);
+        this.emit(depth, `TEST RAX, RAX`);
+        this.emit(depth, `JZ .${branch}\n`);
+
+        // Compile then section
+        this.emit(depth, `# If then`);
+        this.compileExpression(then, scope, depth);
+        this.emit(depth, `JMP .after_${branch}\n`);
+
+        // Compile else section
+        this.emit(depth, `# If else`);
+        this.emit(0, `.${branch}:`);
+        if (els) {
+            this.compileExpression(els, scope, depth);
+        } else {
+            this.emit(1, 'PUSH 0 # Null else branch');
+        }
+        this.emit(0, `.after_${branch}:`);
+        this.emit(depth, '# End if');
+    }
+
+    compileBegin(body:Expression, scope:Scope, depth:number, topLevel = false) {
+        body.forEach((expression:Expression[number], i) => {
+            this.compileExpression(expression, scope, depth);
+            if (!topLevel && i < body.length - 1) {
+                this.emit(depth, `POP RAX # Ignore non-final expression`);
+            }
+        });
+    }
+
+    compileDefine([name, params, ...body]:FuncDefinition, scope:Scope, depth:number) {
+        // Add this function to outer scope
+        const safe = scope.assign(name);
+
+        // Copy outer scope so parameter mappings aren't exposed in outer scope.
+        const childScope = scope.copy();
+
+        this.emit(0, `${safe}:`);
+        this.emit(depth, `PUSH RBP`);
+        this.emit(depth, `MOV RBP, RSP\n`);
+
+        // Copy params into local scope
+        // NOTE: this doesn't actually copy into the local stack, it
+        // just references them from the caller. They will need to
+        // be copied in to support mutation of arguments if that's
+        // ever a desire.
+        params.forEach((param, i) => {
+            childScope.map[param] = -1 * (params.length - i - 1 + 2);
+        });
+
+        // Pass childScope in for reference when body is compiled.
+        this.compileBegin(body, childScope, depth);
+
+        // Save the return value
+        this.emit(0, '');
+        this.emit(depth, `POP RAX`);
+        this.emit(depth, `POP RBP\n`);
+
+        this.emit(depth, 'RET\n');
+    }
+
+    compileCall(fun:FuncName, args:Expression, scope:Scope, depth:number) {
+        if (this.primitiveFunctions[fun]) {
+            this.primitiveFunctions[fun](args, scope, depth);
+            return;
+        }
+
+        // Compile registers and store on the stack
+        args.map((arg) => this.compileExpression(arg, scope, depth));
+
+        const fn = scope.lookup(fun);
+        if (fn) {
+            this.emit(depth, `CALL ${fn.name}`);
+        } else {
+            throw new Error('Attempt to call undefined function: ' + fun);
+        }
+
+        if (args.length > 1) {
+            // Drop the args
+            this.emit(depth, `ADD RSP, ${args.length * 8}`);
+        }
+// Todo ignore for now
+
+        // @ts-ignore
+        if (args.length === 1) {
+            this.emit(depth, `MOV [RSP], RAX\n`);
+        } else {
+            this.emit(depth, 'PUSH RAX\n');
+        }
+    }
+
+    emitPrefix() {
+        this.emit(1, '.global _main\n');
+
+        this.emit(1, '.text\n');
+    }
+
+    emitPostfix() {
+        this.emit(0, '_main:');
+        this.emit(1, 'CALL main');
+        this.emit(1, 'MOV RDI, RAX'); // Set exit arg
+        this.emit(1, `MOV RAX, ${SYSCALL_MAP['exit']}`);
+        this.emit(1, 'SYSCALL');
+    }
+
+    getOutput() {
+        const output = this.outBuffer.join('\n');
+
+        // Leave at most one empty line
+        return output.replace(/\n\n\n+/g, '\n\n');
+    }
+}
+
+export function compile(ast: Expression) {
+    const c = new Compiler();
+    c.emitPrefix();
+    const s = new Scope();
+    c.compileBegin(ast, s, 1, true);
+    c.emitPostfix();
+    return c.getOutput();
+};
+
+export function build(buildDir: string, prefix: string = '', program: string) {
+    const prog = 'prog-' + prefix;
+    fs.writeFileSync(`${buildDir}/${prog}.s`, program);
+    cp.execSync(
+        `gcc -mstackrealign -masm=intel -o ${buildDir}/${prog} ${buildDir}/${prog}.s`,
+    );
+};
+
+export default {
+    compile,
+    build
+}

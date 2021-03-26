@@ -6,10 +6,9 @@ import { NamePointer} from './utility/Scope'
 //     [P in keyof T]: T[P]
 // }
 // type InstructionValue = TupleType<Expression>
-import { FuncDefinition, Literal, Expression, IfExpression } from '../type';
-type Platform = 'darwin' | 'linux'
+import { FuncDefinition, Literal, Expression, IfExpression, Platform, SystemCall } from '../type';
 
-const SYSCALL_TABLE: { 'write': number, 'exit': number } = {
+const SYSCALL_TABLE: SystemCall = {
     darwin: {
         write: 0x2000004,
         exit: 0x2000001,
@@ -116,7 +115,7 @@ class Compiler {
         }
     }
 
-    compileBegin(body: Expression[], destination: NamePointer, context: Context) {
+    compileBegin(body: Expression, destination: NamePointer, context: Context) {
         body.forEach((expression: Expression[number], i) => {
             const isLast = body.length - 1 === i;
             const contextClone = context.copy();

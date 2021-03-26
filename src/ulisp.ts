@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path'
 import { Expression} from './type'
 import { parse } from './parser';
-import { llvm } from './backend';
+import { llvm,x86 } from './backend';
 
 export function main(src: string, backendType: 'llvm' | 'x86' = 'llvm') {
     const kernel = fs.readFileSync(__dirname + '/../lib/kernel.lisp').toString();
@@ -14,9 +14,9 @@ export function main(src: string, backendType: 'llvm' | 'x86' = 'llvm') {
         case undefined:
             backend = llvm;
             break;
-        // case 'x86':
-        //     backend = x86;
-        //     break;
+        case 'x86':
+            backend = x86;
+            break;
         default:
             throw Error('Unsupported backend ' + backendType);
     }
